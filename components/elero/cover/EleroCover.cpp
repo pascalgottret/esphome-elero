@@ -368,7 +368,36 @@ void EleroCover::set_rx_status(uint8_t state, const RxMetadata &meta) {
   if (this->stop_verification_active_.load() &&
       !meta.after(this->stop_rx_cutoff_, this->command_.blind_addr))
     return;
+  // A resting status that arrives right after a movement command (old CHECK
+  // reply, status sent before the motor started) must not switch the cover to
+  // IDLE - otherwise dead-reckoning stops and no STOP is ever sent.
+  if (this->is_stale_rest_state_during_movement_(state, millis())) {
+    this->last_state_raw_ = state;
+    ESP_LOGD(TAG, "Blind 0x%06lx: ignoring resting state 0x%02x (%s) during movement start",
+             static_cast<unsigned long>(this->command_.blind_addr), state, elero_state_to_string(state));
+    return;
+  }
   this->apply_rx_state_(state, meta);
+}
+
+bool EleroCover::is_stale_rest_state_during_movement_(uint8_t state, uint32_t now) const {
+  if (this->current_operation == COVER_OPERATION_IDLE || this->stop_verification_active_.load() ||
+      this->pending_stop_transition_)
+    return false;
+  // Errors must always pass through.
+  if (state == ELERO_STATE_BLOCKING || state == ELERO_STATE_OVERHEATED || state == ELERO_STATE_TIMEOUT)
+    return false;
+  const bool resting = state == ELERO_STATE_TOP || state == ELERO_STATE_BOTTOM ||
+                       state == ELERO_STATE_INTERMEDIATE || state == ELERO_STATE_STOPPED ||
+                       state == ELERO_STATE_TILT || state == ELERO_STATE_TOP_TILT ||
+                       state == ELERO_STATE_BOTTOM_TILT;
+  if (!resting)
+    return false;
+  // Movement requested but first packet not yet on air -> any resting state is old.
+  if (this->pending_movement_start_)
+    return true;
+  return this->movement_start_ != 0 &&
+         static_cast<int32_t>(now - this->movement_start_) < ELERO_MOVEMENT_RX_GRACE_MS;
 }
 
 void EleroCover::apply_rx_state_(uint8_t state, const RxMetadata &meta) {

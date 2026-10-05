@@ -6,6 +6,13 @@
 #include "../elero.h"
 #include <atomic>
 
+// Grace window after a movement command: "resting" status packets (TOP,
+// BOTTOM, INTERMEDIATE, STOPPED, ...) received in this window are treated as
+// stale/pre-movement feedback and must not cancel position tracking.
+#ifndef ELERO_MOVEMENT_RX_GRACE_MS
+#define ELERO_MOVEMENT_RX_GRACE_MS 3000
+#endif
+
 namespace esphome {
 namespace elero {
 
@@ -102,6 +109,7 @@ class EleroCover : public cover::Cover, public Component, public EleroBlindBase 
   void finish_stop_verification_();
   void publish_stop_result_(const char *result);
   void apply_rx_state_(uint8_t state, const RxMetadata &meta);
+  bool is_stale_rest_state_during_movement_(uint8_t state, uint32_t now) const;
 
   t_elero_command command_ = {
     .counter = 1,
